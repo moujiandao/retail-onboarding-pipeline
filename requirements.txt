@@ -1,0 +1,134 @@
+# =============================================================================
+# Core Data Processing
+# =============================================================================
+
+# pandas: Used ONLY for extraction (reading files) and loading (writing to Snowflake)
+# - NOT used for transformations (that's dbt's job in the warehouse)
+# - Keep usage minimal: extract → load → let SQL handle the rest
+pandas>=2.0,<3.0
+
+# numpy: Required by pandas
+numpy>=1.24,<2.0
+
+# =============================================================================
+# PDF & Document Extraction
+# =============================================================================
+
+# pdfplumber: Best-in-class PDF table extraction
+# - Superior table detection vs PyPDF2
+# - Character-level positioning for complex layouts
+# - Critical for invoice parsing
+pdfplumber>=0.10,<1.0
+
+# PyPDF2: Fallback for simple PDF text extraction
+# - Lower memory footprint than pdfplumber
+# - Better for metadata extraction
+PyPDF2>=3.0,<4.0
+
+# =============================================================================
+# OCR (Optical Character Recognition)
+# =============================================================================
+
+# pytesseract: Python wrapper for Tesseract OCR engine
+# SYSTEM REQUIREMENT: Install Tesseract separately
+#   macOS: brew install tesseract
+#   Ubuntu: apt-get install tesseract-ocr
+#   Windows: Download from https://github.com/UB-Mannheim/tesseract/wiki
+pytesseract>=0.3.10,<1.0
+
+# Pillow: Image processing for OCR preprocessing
+# - Grayscale conversion, contrast adjustment, rotation
+# - Preprocessing can improve OCR accuracy by 30-50%
+Pillow>=10.0,<11.0
+
+# =============================================================================
+# Cloud Services
+# =============================================================================
+
+# boto3: AWS SDK for S3 storage
+# - Used for raw file archival and processed data staging
+# - Supports multipart uploads for large files
+boto3>=1.28,<2.0
+
+# snowflake-connector-python: Snowflake warehouse connector
+# - Direct Python connectivity (simpler than ODBC)
+# - Supports bulk loading via COPY INTO
+snowflake-connector-python>=3.0,<4.0
+
+# =============================================================================
+# Data Transformation
+# =============================================================================
+
+# dbt-core: Data transformation framework (SQL-based)
+# - All transformations happen in Snowflake, not Python
+# - Version control for SQL transformations
+# - Automatic dependency resolution (DAG generation)
+# - Built-in testing framework
+dbt-core>=1.7,<2.0
+
+# dbt-snowflake: Snowflake adapter for dbt
+# - Connects dbt to Snowflake warehouse
+# - Handles Snowflake-specific SQL features
+dbt-snowflake>=1.7,<2.0
+
+# =============================================================================
+# Data Quality
+# =============================================================================
+
+# great-expectations: Declarative data validation framework
+# - Define expectations in Python or YAML
+# - Generate HTML reports for stakeholder visibility
+# - Integrates with dbt and orchestration tools
+great-expectations>=0.18,<1.0
+
+# =============================================================================
+# Utilities
+# =============================================================================
+
+# python-dotenv: Load environment variables from .env files
+# - Keeps secrets out of code
+# - 12-factor app principle compliance
+python-dotenv>=1.0,<2.0
+
+# chardet: Character encoding detection
+# - Critical for handling legacy CSV files with unknown encodings
+# - Retail systems often export in ISO-8859-1 or Windows-1252
+chardet>=5.0,<6.0
+
+# =============================================================================
+# Testing
+# =============================================================================
+
+# pytest: Modern Python testing framework
+# - Fixture system for test data management
+# - Rich plugin ecosystem
+pytest>=7.0,<9.0
+
+# pytest-cov: Coverage reporting
+# - Identifies untested code paths
+# - Generates HTML reports
+pytest-cov>=4.0,<6.0
+
+# moto: Mock AWS services for testing
+# - Test S3 uploads without hitting real AWS
+# - Speeds up tests and eliminates cloud costs during development
+moto[s3]>=4.0,<6.0
+
+# =============================================================================
+# Code Quality
+# =============================================================================
+
+# ruff: Fast Python linter and formatter
+# - 10-100x faster than flake8 + black combined
+# - Single tool replaces multiple linters
+# - Written in Rust, increasingly adopted by major projects
+ruff>=0.1,<1.0
+
+# =============================================================================
+# PDF Generation (for mock data)
+# =============================================================================
+
+# reportlab: PDF generation library
+# - Used to create realistic invoice PDFs for testing
+# - Industry standard for programmatic PDF creation
+reportlab>=4.0,<5.0
