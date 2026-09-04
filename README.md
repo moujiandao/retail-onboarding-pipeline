@@ -1,383 +1,114 @@
 # Retail Onboarding Pipeline
 
-Production data pipeline for onboarding new grocery retailers onto the platform. Processes vendor invoices, transaction receipts, and product catalogs from heterogeneous source systems into a unified Snowflake data warehouse.
+This repository is a reference implementation for extracting and staging grocery-retailer data from CSV files, vendor invoices, and receipt images.
 
-## Overview
+It focuses on the messy boundary between source files and a warehouse: inconsistent encodings, changing delimiters, semi-structured PDFs, OCR confidence, cloud configuration, and recoverable failures. It is a practice project, not a deployed production pipeline.
 
-This pipeline handles the data engineering workflow for bringing new grocery retail customers online. It processes:
+## Implemented
 
-- **PDF invoices** from multiple vendor formats (EDI, handwritten, scanned)
-- **Transaction receipts** (including OCR for scanned/photographed receipts)
-- **Product catalogs** (CSV exports from legacy POS systems)
-- **Price change logs** with temporal reconciliation
+- CSV extraction with encoding and delimiter detection.
+- Header normalization and source-file metadata attached to extracted frames.
+- PDF invoice extraction using table detection with a text-pattern fallback.
+- Receipt OCR with image preprocessing and confidence scoring.
+- Staging output in Parquet, text, and JSON formats.
+- Quarantine paths for files that cannot be parsed or fall below the OCR confidence threshold.
+- Synthetic generators for product catalogs, price changes, invoices, and receipt images.
+- S3 upload utilities with partitioned object keys and checksum metadata.
+- Snowflake loading utilities built around staging tables and `MERGE` operations.
+- Environment-based configuration with explicit validation for optional cloud services.
 
-The system is designed for data quality and auditability, with immutable raw data storage, comprehensive validation, and detailed lineage tracking.
+## Current flow
 
-## Architecture
+```text
+Synthetic or local source files
+    |
+    +-- CSV extractor
+    +-- PDF invoice extractor
+    +-- receipt OCR extractor
+    |
+    +-- successful records -> data/staging/
+    +-- failed records     -> data/quarantine/
+                              + error metadata
 
-**ELT Pattern**: Extract → Load → Transform (in warehouse)
-
-```
-┌─────────────────────────────────────────────┐
-│         Source Systems (Raw Files)          │
-│   PDF Invoices | Scanned Receipts | CSVs    │
-└──────────────────┬──────────────────────────┘
-                   │
-                   ▼
-┌──────────────────────────────────────────────┐
-│         Python Extractors (src/extractors)   │
-│   • pdfplumber (structured PDF tables)       │
-│   • pytesseract (OCR for scanned images)     │
-│   • pandas (CSV with encoding detection)     │
-│                                               │
-│   Output: Raw DataFrames (minimal parsing)   │
-└──────────────────┬───────────────────────────┘
-                   │
-                   ├─────────────────┐
-                   │                 │
-                   ▼                 ▼
-         ┌─────────────────┐  ┌──────────────┐
-         │   S3 Archival   │  │  Snowflake   │
-         │   (Raw Files)   │  │  RAW Schema  │
-         └─────────────────┘  └──────┬───────┘
-                                     │
-                                     │ All transformations
-                                     │ happen here ↓
-                                     │
-                         ┌───────────▼──────────────┐
-                         │   dbt (SQL-based)        │
-                         │                          │
-                         │  STAGING schema:         │
-                         │  • Rename columns        │
-                         │  • Cast types            │
-                         │  • Add surrogate keys    │
-                         │                          │
-                         │  ANALYTICS schema:       │
-                         │  • dim_vendor            │
-                         │  • dim_product           │
-                         │  • dim_date              │
-                         │  • fact_invoice_line     │
-                         │  • fact_receipt_line     │
-                         │  • fact_reconciliation   │
-                         │                          │
-                         │  + Built-in tests        │
-                         │  + Lineage tracking      │
-                         └──────────────────────────┘
+Optional cloud loaders
+    +-- raw or staged files -> Amazon S3
+    +-- staged data         -> Snowflake
 ```
 
-**Why This Architecture?**
+The extraction runner processes independent files and records failures without stopping the entire batch.
 
-1. **Python for I/O only**: Extract from files, load to warehouse. No business logic.
-2. **SQL for transformations**: dbt runs in Snowflake where data already lives (faster, more scalable)
-3. **Clear separation**: Data engineers write SQL, not complex pandas code
-4. **Testable**: dbt has built-in testing, Great Expectations validates at each layer
+## Local setup
 
-## Project Structure
+Requirements:
 
-```
-retail-onboarding-pipeline/
-│
-├── data/
-│   ├── raw/                    # Immutable source data
-│   │   ├── invoices/
-│   │   ├── receipts/
-│   │   └── item_master/
-│   ├── staging/                # Intermediate processing
-│   └── processed/              # Validated output
-│
-├── src/
-│   ├── extractors/             # Parse source files → DataFrames
-│   ├── loaders/                # Load DataFrames → Snowflake/S3
-│   └── utils/                  # Config, logging, helpers
-│
-├── dbt/                        # Data transformation models
-│   ├── models/
-│   │   ├── staging/           # 1:1 source models
-│   │   └── marts/             # Business logic layer
-│   └── tests/                 # Data quality tests
-│
-├── scripts/                    # Pipeline orchestration
-│   ├── generate_*.py          # Mock data generators
-│   ├── run_extraction.py      # Extraction orchestrator
-│   └── run_pipeline.py        # Full pipeline runner
-│
-└── tests/
-    ├── unit/                  # Component tests
-    ├── integration/           # End-to-end tests
-    └── fixtures/              # Test data
-```
-
-### Why This Structure?
-
-**Raw/Staging/Processed Separation**: Raw data is immutable—never modified after ingestion. This enables:
-- Re-running transformations from scratch when logic changes
-- Comparing processed output against original source for debugging
-- Maintaining audit trail for compliance
-
-**ELT Over ETL**: We load raw data into Snowflake first, then transform it with SQL/dbt. Why?
-- **Performance**: Transform where data lives (in the warehouse, not Python)
-- **Scalability**: Snowflake can process billions of rows; pandas struggles at millions
-- **Maintainability**: SQL transformations are easier to review and test than pandas code
-- **Collaboration**: Analysts understand SQL; not everyone knows pandas
-
-**No `transformers/` Package**: All transformations are in `dbt/models/` (SQL), not Python. Python is only for:
-- Reading files that can't be loaded directly (PDFs, OCR)
-- Loading data into Snowflake
-- Orchestration logic
-
-**Modular Extractors/Loaders**: Each is independently testable. Swapping implementations (e.g., S3 → GCS) requires changing one module.
-
-## Quick Start
+- Python 3.10+
+- Tesseract when processing receipt images
 
 ```bash
-# Clone and setup
-git clone <repository-url>
-cd retail-onboarding-pipeline
-
-# Create virtual environment
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
+python -m venv .venv
+source .venv/bin/activate
 pip install -r requirements.txt
-
-# Configure environment
 cp .env.example .env
-# Edit .env with your Snowflake/AWS credentials
-
-# Verify installation
-pytest tests/ -v
 ```
 
-### System Requirements
+Tesseract installation examples:
 
-**Python**: 3.10 or higher
-
-**Tesseract OCR** (required for receipt processing):
 ```bash
 # macOS
 brew install tesseract
 
-# Ubuntu/Debian
+# Ubuntu or Debian
 sudo apt-get install tesseract-ocr
-
-# Windows
-# Download from: https://github.com/UB-Mannheim/tesseract/wiki
 ```
 
-## Usage
+AWS and Snowflake configuration is optional for local extraction work. Keep credentials in `.env`, which is excluded from Git.
 
-### Generate Mock Data (Development)
+## Generate synthetic input
 
 ```bash
-# Generate synthetic grocery data for testing
-python scripts/generate_item_master.py
-python scripts/generate_invoices.py
-python scripts/generate_receipts.py
+python scripts/generate_all_data.py
 ```
 
-### Run Extraction Pipeline
+The generators create related product, price, invoice, and receipt fixtures under `data/raw/`. Use the individual `generate_*.py` scripts when a smaller dataset is enough.
+
+## Run extraction
 
 ```bash
-# Extract from raw files to staging
-python scripts/run_extraction.py
-
-# With date filter
-python scripts/run_extraction.py --start-date 2024-01-01 --end-date 2024-01-31
-
-# Dry run (validate without writing)
+# Inspect inputs without writing staged output
 python scripts/run_extraction.py --dry-run
+
+# Write successful output and quarantine failures
+python scripts/run_extraction.py
 ```
 
-### Run Full Pipeline
+Generated source and staging data are excluded from version control.
+
+## Verification
 
 ```bash
-# Extract → S3 Upload → Snowflake Load → dbt Transform
-python scripts/run_pipeline.py
-
-# With verbose logging
-python scripts/run_pipeline.py --log-level DEBUG
+pytest tests/
+ruff check src/ tests/ scripts/
+ruff format --check src/ tests/ scripts/
 ```
 
-### dbt Operations
+The current tests exercise configuration behavior and the CSV extractor, including encoding, delimiter, schema, and malformed-input cases.
+The suite currently has four known CSV-extractor failures around numeric coercion, Latin-1 detection, and trailing punctuation in normalized column names. Ruff also reports existing formatting and lint debt. The commands above define the cleanup gate for the next implementation pass.
 
-```bash
-cd dbt/
+## Technology
 
-# Run transformations
-dbt run
+- Python and pandas
+- pdfplumber and PyPDF2
+- Tesseract and Pillow
+- Boto3
+- Snowflake Connector for Python
+- pytest and Ruff
 
-# Run tests
-dbt test
+## Current limitations
 
-# Generate documentation
-dbt docs generate
-dbt docs serve
-```
+- The repository does not yet contain the documented dbt transformation project.
+- Great Expectations is listed as a dependency but no expectation suite is implemented.
+- There is no complete extraction-to-S3-to-Snowflake orchestration command.
+- PDF, OCR, S3, and Snowflake behavior do not yet have the same test coverage as configuration and CSV extraction.
+- Cloud loading requires separately provisioned AWS and Snowflake accounts.
 
-## Data Quality
-
-### Validation Strategy
-
-The pipeline implements multi-layered validation:
-
-1. **Extraction Layer**: File format validation, encoding detection
-2. **Great Expectations**: Schema validation, statistical profiling
-3. **dbt Tests**: Business rule validation, referential integrity
-4. **Reconciliation**: Invoice-to-receipt matching, variance detection
-
-### Quarantine Pattern
-
-Failed records are quarantined rather than discarded:
-
-```
-data/
-├── processed/
-│   └── invoices/2024-01-15_success.parquet
-└── quarantine/
-    └── invoices/2024-01-15_failed.parquet  # Includes error metadata
-```
-
-This enables:
-- Manual review of failures
-- Re-processing after bug fixes
-- Quality metrics tracking over time
-
-## Data Model
-
-### Star Schema (dbt marts)
-
-```
-fact_invoice_line ─┬─→ dim_vendor
-                   ├─→ dim_product
-                   └─→ dim_date
-
-fact_receipt_line ─┬─→ dim_store
-                   ├─→ dim_product
-                   └─→ dim_date
-
-fact_reconciliation ─→ Matches invoices to receipts
-```
-
-### Key Tables
-
-| Table | Type | Description |
-|-------|------|-------------|
-| `dim_vendor` | Dimension | Vendor master (SCD Type 1) |
-| `dim_product` | Dimension | Product catalog with pricing |
-| `dim_date` | Dimension | Date dimension for time-series |
-| `fact_invoice_line` | Fact | Invoice line items |
-| `fact_receipt_line` | Fact | Transaction line items |
-| `fact_reconciliation` | Fact | Invoice-receipt matching |
-
-## Configuration
-
-All configuration via environment variables (12-factor app principle):
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `SNOWFLAKE_ACCOUNT` | Yes* | Snowflake account identifier |
-| `SNOWFLAKE_USER` | Yes* | Database user |
-| `SNOWFLAKE_PASSWORD` | Yes* | Database password |
-| `AWS_ACCESS_KEY_ID` | Yes* | AWS access key |
-| `AWS_SECRET_ACCESS_KEY` | Yes* | AWS secret key |
-| `S3_BUCKET` | Yes* | S3 bucket for data storage |
-| `LOG_LEVEL` | No | Logging verbosity (default: INFO) |
-| `DATA_DIR` | No | Data directory (default: ./data) |
-
-\* Required for production; optional for local development with mock data
-
-See `.env.example` for full configuration options.
-
-## Development
-
-### Running Tests
-
-```bash
-# All tests
-pytest tests/ -v
-
-# Unit tests only (fast)
-pytest tests/unit/ -v
-
-# With coverage
-pytest tests/ --cov=src --cov-report=html
-
-# Specific test file
-pytest tests/unit/test_config.py -v
-```
-
-### Code Quality
-
-```bash
-# Lint code
-ruff check src/ tests/
-
-# Auto-fix issues
-ruff check src/ tests/ --fix
-
-# Format code
-ruff format src/ tests/
-```
-
-## Deployment
-
-### Snowflake Setup
-
-```bash
-# Create warehouse, database, schemas
-python scripts/run_snowflake_setup.py
-```
-
-This creates:
-- Database: `RETAIL_ONBOARDING`
-- Schemas: `RAW`, `STAGING`, `ANALYTICS`
-- Tables: Invoice, receipt, and item tables
-- Metadata: Load history tracking
-
-### Production Considerations
-
-1. **Idempotency**: All operations are idempotent. Re-running doesn't create duplicates.
-2. **Incremental Loading**: Use `--start-date` and `--end-date` to process date ranges.
-3. **Error Handling**: Failed records are quarantined, not dropped.
-4. **Monitoring**: Pipeline logs include row counts, timing, and error rates.
-
-## Troubleshooting
-
-### Common Issues
-
-**Tesseract not found**:
-```bash
-# Verify installation
-tesseract --version
-
-# If not in PATH, set TESSERACT_CMD in .env
-TESSERACT_CMD=/path/to/tesseract
-```
-
-**Encoding errors in CSV parsing**:
-- The pipeline auto-detects encoding using `chardet`
-- If detection fails, files are quarantined with error details
-- Check `data/quarantine/` for failed files
-
-**Snowflake connection timeout**:
-- Verify credentials in `.env`
-- Check network connectivity and firewall rules
-- Ensure Snowflake account is active
-
-## Performance
-
-Current scale (tested):
-- ~10,000 product SKUs
-- ~100 invoices/month
-- ~1,500 receipts/month
-- Pipeline runtime: ~5-10 minutes end-to-end
-
-For 10x+ scale, consider:
-- Parallel processing (Python multiprocessing or Dask)
-- Incremental loading (process only changed files)
-- Warehouse optimization (clustering keys, materialized views)
-
-## License
-
-MIT License - See LICENSE file for details
+These gaps are intentionally stated here rather than represented as finished functionality.
